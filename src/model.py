@@ -15,7 +15,7 @@ from transformers.optimization import get_cosine_schedule_with_warmup
 
 from src.loss import SoftTargetCrossEntropy
 from src.mixup import Mixup
-from utils import block_expansion
+from src.utils import block_expansion
 
 MODEL_DICT = {
     "vit-b16-224-in21k": "google/vit-base-patch16-224-in21k",

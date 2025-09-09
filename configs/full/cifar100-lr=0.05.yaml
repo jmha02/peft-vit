@@ -23,7 +23,7 @@ data:
   root: data/
   size: 224
   batch_size: 128
-  workers: 4
+  workers: 0
 model_checkpoint:
   filename: best-step-{step}-{val_acc:.4f}
   monitor: val_acc
