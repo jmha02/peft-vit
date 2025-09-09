@@ -18,6 +18,7 @@ model:
   weight_decay: 0.0
   scheduler: cosine
   warmup_steps: 500
+  enable_profiling: true
 data:
   dataset: cifar100
   root: data/

@@ -15,7 +15,7 @@ from transformers.optimization import get_cosine_schedule_with_warmup
 
 from src.loss import SoftTargetCrossEntropy
 from src.mixup import Mixup
-from src.utils import block_expansion
+from src.utils import block_expansion, TrainingProfiler, count_parameters
 
 MODEL_DICT = {
     "vit-b16-224-in21k": "google/vit-base-patch16-224-in21k",
@@ -63,6 +63,7 @@ class ClassificationModel(pl.LightningModule):
         lora_dropout: float = 0.0,
         lora_bias: str = "none",
         from_scratch: bool = False,
+        enable_profiling: bool = False,
     ):
         """Classification Model
 
@@ -90,6 +91,7 @@ class ClassificationModel(pl.LightningModule):
             lora_dropout: Dropout probability for LoRA layers
             lora_bias: Whether to train biases during LoRA. One of ['none', 'all' or 'lora_only']
             from_scratch: Initialize network with random weights instead of a pretrained checkpoint
+            enable_profiling: Enable timing and memory profiling during training
         """
         super().__init__()
         self.save_hyperparameters()
@@ -115,6 +117,10 @@ class ClassificationModel(pl.LightningModule):
         self.lora_dropout = lora_dropout
         self.lora_bias = lora_bias
         self.from_scratch = from_scratch
+        self.enable_profiling = enable_profiling
+        
+        # Initialize profiler
+        self.profiler = TrainingProfiler() if enable_profiling else None
 
         # Initialize network
         try:
@@ -253,6 +259,24 @@ class ClassificationModel(pl.LightningModule):
         )
 
         self.test_metric_outputs = []
+        
+        # Log model parameter information if profiling is enabled
+        if self.enable_profiling:
+            param_info = count_parameters(self.net)
+            print(f"\n{'='*60}")
+            print(f"MODEL PARAMETER ANALYSIS - {self.training_mode.upper()}")
+            print(f"{'='*60}")
+            print(f"Training Mode: {self.training_mode}")
+            print(f"Total Parameters: {param_info['total_parameters']:,}")
+            print(f"Trainable Parameters: {param_info['trainable_parameters']:,}")
+            print(f"Parameter Efficiency: {param_info['parameter_efficiency_pct']:.2f}%")
+            if self.training_mode == 'lora':
+                print(f"LoRA Rank: {self.lora_r}")
+                print(f"LoRA Alpha: {self.lora_alpha}")
+                print(f"LoRA Target Modules: {self.lora_target_modules}")
+            print(f"{'='*60}")
+            
+            self.param_info = param_info
 
     def forward(self, x):
         return self.net(pixel_values=x).logits
@@ -285,8 +309,18 @@ class ClassificationModel(pl.LightningModule):
         return loss
 
     def training_step(self, batch, _):
+        # Start profiling timer if enabled
+        if self.profiler:
+            self.profiler.start_step()
+        
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"], prog_bar=True)
-        return self.shared_step(batch, "train")
+        loss = self.shared_step(batch, "train")
+        
+        # End profiling timer if enabled
+        if self.profiler:
+            self.profiler.end_step()
+        
+        return loss
 
     def validation_step(self, batch, _):
         return self.shared_step(batch, "val")
@@ -311,6 +345,31 @@ class ClassificationModel(pl.LightningModule):
         df = pd.DataFrame(per_class_acc, columns=["acc", "n"])
         df.to_csv("per-class-acc-test.csv")
         print("Saved per-class results in per-class-acc-test.csv")
+        
+    def on_fit_start(self):
+        """Called when fit begins."""
+        if self.profiler:
+            self.profiler.start_timing()
+            
+    def on_fit_end(self):
+        """Called when fit ends."""
+        if self.profiler:
+            # Print profiling results
+            self.profiler.print_stats(self.training_mode)
+            
+            # Save detailed profiling stats
+            profiling_stats = self.profiler.get_stats()
+            profiling_stats.update({
+                'training_mode': self.training_mode,
+                'model_name': self.model_name,
+            })
+            profiling_stats.update(self.param_info)
+            
+            # Save to file
+            output_dir = getattr(self.trainer.logger, 'save_dir', 'output')
+            profile_path = f"{output_dir}/profiling_results.json"
+            self.profiler.save_stats(profile_path, profiling_stats)
+            print(f"Detailed profiling results saved to: {profile_path}")
 
     def configure_optimizers(self):
         # Initialize optimizer
