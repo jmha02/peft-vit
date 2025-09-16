@@ -22,9 +22,9 @@ import torch.backends.cudnn as cudnn
 from torchvision import datasets
 from torchvision import transforms as pth_transforms
 from torchvision import models as torchvision_models
+from torchvision.datasets import CIFAR100
 
 import utils
-import vision_transformer as vits
 
 import pandas as pd
 import pytorch_lightning as pl

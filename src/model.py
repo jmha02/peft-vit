@@ -259,6 +259,8 @@ class ClassificationModel(pl.LightningModule):
         )
 
         self.test_metric_outputs = []
+        self.val_accuracies = []  # Track validation accuracies for plotting
+        self.val_steps = []  # Track the step numbers for validation
         
         # Log model parameter information if profiling is enabled
         if self.enable_profiling:
@@ -325,6 +327,23 @@ class ClassificationModel(pl.LightningModule):
     def validation_step(self, batch, _):
         return self.shared_step(batch, "val")
 
+    def on_validation_epoch_end(self):
+        """Track and print validation accuracy at end of each epoch."""
+        # Get current validation accuracy
+        val_acc = self.trainer.callback_metrics.get('val_acc', 0.0)
+        current_step = self.trainer.global_step
+        current_epoch = self.trainer.current_epoch
+        
+        self.val_accuracies.append(val_acc.item() if hasattr(val_acc, 'item') else float(val_acc))
+        self.val_steps.append(current_step)
+        
+        # Print current step and epoch validation accuracy
+        print(f"Step {current_step} (Epoch {current_epoch}): Validation Accuracy = {val_acc:.4f}")
+        
+        # Print all validation accuracies so far with steps
+        step_acc_pairs = [f"Step {step}: {acc:.4f}" for step, acc in zip(self.val_steps, self.val_accuracies)]
+        print(f"All validation accuracies: {step_acc_pairs}")
+
     def test_step(self, batch, _):
         return self.shared_step(batch, "test")
 
@@ -353,6 +372,10 @@ class ClassificationModel(pl.LightningModule):
             
     def on_fit_end(self):
         """Called when fit ends."""
+        # Plot validation accuracy curve and save CSV
+        if len(self.val_accuracies) > 0:
+            self._plot_validation_accuracy()
+        
         if self.profiler:
             # Print profiling results
             self.profiler.print_stats(self.training_mode)
@@ -370,6 +393,56 @@ class ClassificationModel(pl.LightningModule):
             profile_path = f"{output_dir}/profiling_results.json"
             self.profiler.save_stats(profile_path, profiling_stats)
             print(f"Detailed profiling results saved to: {profile_path}")
+
+    def _plot_validation_accuracy(self):
+        """Plot validation accuracy over steps and save data to CSV."""
+        import matplotlib.pyplot as plt
+        
+        # Save validation accuracies to CSV
+        output_dir = getattr(self.trainer.logger, 'save_dir', 'output')
+        val_acc_data = pd.DataFrame({
+            'step': self.val_steps,
+            'validation_accuracy': self.val_accuracies,
+            'training_mode': [self.training_mode] * len(self.val_accuracies),
+            'model_name': [self.model_name] * len(self.val_accuracies)
+        })
+        csv_path = f"{output_dir}/validation_accuracies.csv"
+        val_acc_data.to_csv(csv_path, index=False)
+        print(f"Validation accuracies saved to: {csv_path}")
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.val_steps, self.val_accuracies, 'b-o', linewidth=2, markersize=6)
+        plt.title(f'Validation Accuracy - {self.training_mode.upper()} ({self.model_name})')
+        plt.xlabel('Training Step')
+        plt.ylabel('Validation Accuracy')
+        plt.grid(True, alpha=0.3)
+        plt.ylim(0, 1)
+        
+        # Add max accuracy annotation
+        max_acc = max(self.val_accuracies)
+        max_idx = self.val_accuracies.index(max_acc)
+        max_step = self.val_steps[max_idx]
+        plt.annotate(f'Max: {max_acc:.4f}', 
+                    xy=(max_step, max_acc), 
+                    xytext=(max_step + 50, max_acc + 0.05),
+                    arrowprops=dict(arrowstyle='->', color='red'))
+        
+        # Save plot
+        plot_path = f"{output_dir}/validation_accuracy_plot.png"
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        print(f"Validation accuracy plot saved to: {plot_path}")
+        
+        # Print final summary
+        print(f"\n{'='*50}")
+        print(f"VALIDATION ACCURACY SUMMARY")
+        print(f"{'='*50}")
+        print(f"Final validation accuracy: {self.val_accuracies[-1]:.4f} at step {self.val_steps[-1]}")
+        print(f"Maximum validation accuracy: {max_acc:.4f} at step {max_step}")
+        print(f"Total validation points: {len(self.val_accuracies)}")
+        print(f"CSV file: {csv_path}")
+        print(f"{'='*50}")
+        
+        plt.show()
 
     def configure_optimizers(self):
         # Initialize optimizer
